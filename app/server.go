@@ -65,12 +65,6 @@ func send(conn net.Conn, message *[]byte) error {
 
 func handleConnection(conn net.Conn) {
 	for {
-		buffer := make([]byte, 1024)
-		_, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Error reading from connection: ", err.Error())
-			return
-		}
 		message, err := read(conn)
 		if err != nil {
 			fmt.Println("Error reading message: ", err.Error())
