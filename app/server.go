@@ -34,17 +34,22 @@ func main() {
 	}
 }
 
+func send(conn net.Conn, message *[]byte) error {
+	binary.Write(conn, binary.BigEndian, int32(len(*message)))
+	binary.Write(conn, binary.BigEndian, message)
+	return nil
+}
+
 func handleConnection(conn net.Conn) {
-	defer conn.Close()
 	buffer := make([]byte, 1024)
 	_, err := conn.Read(buffer)
 	if err != nil {
 		fmt.Println("Error reading from connection: ", err.Error())
 		return
 	}
-	_ = binary.BigEndian.Uint16(buffer[0:4])              // message
-	_ = binary.BigEndian.Uint16(buffer[4:6])              // api_key
-	reqApiVersion := binary.BigEndian.Uint16(buffer[6:8]) // api_version
+	_ = binary.BigEndian.Uint16(buffer[0:4])
+	reqApiKey := binary.BigEndian.Uint16(buffer[4:6])
+	reqApiVersion := binary.BigEndian.Uint16(buffer[6:8])
 	correlationId := binary.BigEndian.Uint32(buffer[8:12])
 
 	errorCode := 0
@@ -52,13 +57,25 @@ func handleConnection(conn net.Conn) {
 		errorCode = 35
 	}
 
-	response := make([]byte, 10)
-	binary.BigEndian.PutUint16(response[0:4], 23)                 // message_size
-	binary.BigEndian.PutUint32(response[4:8], correlationId)      // correlation_id
-	binary.BigEndian.PutUint16(response[8:10], uint16(errorCode)) // error code
-	_, err = conn.Write([]byte(response))
-	if err != nil {
-		fmt.Println("Error writing to connection: ", err.Error())
-		return
+	fmt.Println("Got request from client: ", reqApiKey, reqApiVersion, correlationId)
+
+	if reqApiKey == 18 {
+		fmt.Println("ApiVersions request")
+		response := make([]byte, 19)
+		binary.BigEndian.PutUint32(response[0:], correlationId)
+		binary.BigEndian.PutUint16(response[4:], uint16(errorCode))
+		response[6] = 2
+		// api version entry
+		binary.BigEndian.PutUint16(response[7:], 18)
+		binary.BigEndian.PutUint16(response[9:], 3)
+		binary.BigEndian.PutUint16(response[11:], 4)
+		response[13] = 0
+		binary.BigEndian.PutUint32(response[14:], 0)
+		response[18] = 0
+		err = send(conn, &response)
+		if err != nil {
+			fmt.Println("Error sending response: ", err.Error())
+			return
+		}
 	}
 }
