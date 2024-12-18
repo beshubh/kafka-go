@@ -42,9 +42,14 @@ func handleConnection(conn net.Conn) {
 		fmt.Println("Error reading from connection: ", err.Error())
 		return
 	}
+	_ = binary.BigEndian.Uint16(buffer[0:4])
+	_ = binary.BigEndian.Uint16(buffer[4:6])
+	_ = binary.BigEndian.Uint16(buffer[6:8])
+	correlationId := binary.BigEndian.Uint32(buffer[8:12])
+
 	response := make([]byte, 8)
-	binary.BigEndian.PutUint16(response[0:4], 0) // message_size
-	binary.BigEndian.PutUint32(response[4:8], 7) // correlation_id
+	binary.BigEndian.PutUint16(response[0:4], 0)             // message_size
+	binary.BigEndian.PutUint32(response[4:8], correlationId) // correlation_id
 	_, err = conn.Write([]byte(response))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
