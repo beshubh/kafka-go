@@ -78,17 +78,23 @@ func handleConnection(conn net.Conn) {
 
 		if message.apiKey == 18 {
 			fmt.Println("ApiVersions request")
-			response := make([]byte, 19)
+			response := make([]byte, 26)
 			binary.BigEndian.PutUint32(response[0:], message.correlationId)
 			binary.BigEndian.PutUint16(response[4:], uint16(errorCode))
-			response[6] = 2
+			response[6] = 3
 			// api version entry
 			binary.BigEndian.PutUint16(response[7:], 18)
-			binary.BigEndian.PutUint16(response[9:], 3)
+			binary.BigEndian.PutUint16(response[9:], 0)
 			binary.BigEndian.PutUint16(response[11:], 4)
-			response[13] = 0
-			binary.BigEndian.PutUint32(response[14:], 0)
-			response[18] = 0
+			response[13] = 0 // tag buffer
+			// describe topic partitions entry
+			binary.BigEndian.PutUint16(response[14:], 75)
+			binary.BigEndian.PutUint16(response[16:], 0)
+			binary.BigEndian.PutUint16(response[18:], 0)
+			response[19] = 0 // tag buffer
+			binary.BigEndian.PutUint32(response[20:], 0)
+			response[24] = 0 // throttle time
+			response[25] = 0
 			err = send(conn, &response)
 			if err != nil {
 				fmt.Println("Error sending response: ", err.Error())
