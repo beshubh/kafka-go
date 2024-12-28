@@ -23,6 +23,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	registery := NewRequestRegistry()
+	registery.RegisterHandler(18, NewApiVersionsHandler())
+	registery.RegisterHandler(75, NewDescribeTopicPartsHandler())
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -30,7 +34,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("Did accept connection")
-		go handleConnection(conn)
+		go handleConnection(registery, conn)
 	}
 }
 
@@ -39,6 +43,8 @@ type Message struct {
 	apiKey        uint16
 	apiVersion    uint16
 	correlationId uint32
+	clientId      string
+	requestBody   []byte
 }
 
 func read(conn net.Conn) (Message, error) {
@@ -48,12 +54,22 @@ func read(conn net.Conn) (Message, error) {
 		fmt.Println("Error reading from connection: ", err.Error())
 		return Message{}, err
 	}
-	message := Message{
-		messageSize:   binary.BigEndian.Uint32(buffer[0:4]),
-		apiKey:        binary.BigEndian.Uint16(buffer[4:6]),
-		apiVersion:    binary.BigEndian.Uint16(buffer[6:8]),
-		correlationId: binary.BigEndian.Uint32(buffer[8:12]),
+	messageSize := binary.BigEndian.Uint32(buffer[0:4])
+	rawMessage := buffer[4:messageSize]
+	message := Message{}
+	message.messageSize = messageSize
+	message.apiKey = binary.BigEndian.Uint16(rawMessage[0:])
+	message.apiVersion = binary.BigEndian.Uint16(rawMessage[2:])
+	message.correlationId = binary.BigEndian.Uint32(rawMessage[4:])
+
+	clientIdLength := binary.BigEndian.Uint16(rawMessage[8:])
+	if clientIdLength > 0 {
+		message.clientId = string(rawMessage[10 : 10+clientIdLength])
 	}
+	rawMessage = rawMessage[10+clientIdLength:]
+	// FIXME: assuming an empty tag buffer, below
+	fmt.Println("message", message)
+	message.requestBody = rawMessage[1:]
 	return message, nil
 }
 
@@ -63,7 +79,7 @@ func send(conn net.Conn, message *[]byte) error {
 	return nil
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(handlerRegistry *RequestRegistry, conn net.Conn) {
 	for {
 		message, err := read(conn)
 		if err != nil {
@@ -71,35 +87,29 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 
-		errorCode := 0
-		if message.apiVersion > 4 {
-			errorCode = 35
+		// errorCode := 0
+		// if message.apiVersion > 4 {
+		// 	errorCode = 35
+		// }
+		handler, err := handlerRegistry.GetHandler(message.apiKey)
+		if err != nil {
+			fmt.Println("Error getting handler: ", err.Error())
+			return
 		}
-
-		if message.apiKey == 18 {
-			fmt.Println("ApiVersions request")
-			response := make([]byte, 26)
-			binary.BigEndian.PutUint32(response[0:], message.correlationId)
-			binary.BigEndian.PutUint16(response[4:], uint16(errorCode))
-			response[6] = 3
-			// api version entry
-			binary.BigEndian.PutUint16(response[7:], 18)
-			binary.BigEndian.PutUint16(response[9:], 0)
-			binary.BigEndian.PutUint16(response[11:], 4)
-			response[13] = 0 // tag buffer
-			// describe topic partitions entry
-			binary.BigEndian.PutUint16(response[14:], 75)
-			binary.BigEndian.PutUint16(response[16:], 0)
-			binary.BigEndian.PutUint16(response[18:], 0)
-			response[19] = 0 // tag buffer
-			binary.BigEndian.PutUint32(response[20:], 0)
-			response[24] = 0 // throttle time
-			response[25] = 0
-			err = send(conn, &response)
-			if err != nil {
-				fmt.Println("Error sending response: ", err.Error())
-				return
-			}
+		err = handler.Parse(message.requestBody)
+		if err != nil {
+			fmt.Println("Error parsing request: ", err.Error())
+			return
+		}
+		response, err := handler.Handle(message)
+		if err != nil {
+			fmt.Println("Error handling request: ", err.Error())
+			return
+		}
+		err = send(conn, &response)
+		if err != nil {
+			fmt.Println("Error sending response: ", err.Error())
+			return
 		}
 	}
 }
