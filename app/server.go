@@ -55,7 +55,7 @@ func read(conn net.Conn) (Message, error) {
 		return Message{}, err
 	}
 	messageSize := binary.BigEndian.Uint32(buffer[0:4])
-	rawMessage := buffer[4:messageSize]
+	rawMessage := buffer[4 : 4+messageSize]
 	message := Message{}
 	message.messageSize = messageSize
 	message.apiKey = binary.BigEndian.Uint16(rawMessage[0:])
@@ -68,29 +68,23 @@ func read(conn net.Conn) (Message, error) {
 	}
 	rawMessage = rawMessage[10+clientIdLength:]
 	// FIXME: assuming an empty tag buffer, below
-	fmt.Println("message", message)
 	message.requestBody = rawMessage[1:]
 	return message, nil
 }
 
 func send(conn net.Conn, message *[]byte) error {
-	binary.Write(conn, binary.BigEndian, int32(len(*message)))
-	binary.Write(conn, binary.BigEndian, message)
+	conn.Write(*message)
 	return nil
 }
 
 func handleConnection(handlerRegistry *RequestRegistry, conn net.Conn) {
+	defer conn.Close()
 	for {
 		message, err := read(conn)
 		if err != nil {
-			fmt.Println("Error reading message: ", err.Error())
+			fmt.Println("Connection closed")
 			return
 		}
-
-		// errorCode := 0
-		// if message.apiVersion > 4 {
-		// 	errorCode = 35
-		// }
 		handler, err := handlerRegistry.GetHandler(message.apiKey)
 		if err != nil {
 			fmt.Println("Error getting handler: ", err.Error())

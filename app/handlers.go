@@ -44,7 +44,6 @@ func (h *DescribeTopicPartsHandler) Parse(body []byte) error {
 		return errors.New("DescribeTopicPartsRequest request body too short")
 	}
 	topicCount := int8(body[0])
-	fmt.Println("topicCount", topicCount)
 	offset := 1
 	topics := make([]string, 0, topicCount)
 
@@ -52,38 +51,36 @@ func (h *DescribeTopicPartsHandler) Parse(body []byte) error {
 		if offset >= len(body) {
 			return errors.New("DescribeTopicPartsRequest invalid body length while parsing topics")
 		}
-		topicLen := int8(body[offset])
-		fmt.Println("topicLen", topicLen)
-
+		topicLen := int8(body[offset]) - 1
+		offset++
 		if offset+int(topicLen) > len(body) {
 			return errors.New("DescribeTopicPartsRequest invalid topic length")
 		}
 		topics = append(topics, string(body[offset:offset+int(topicLen)]))
-		offset += int(topicLen) - 1
+		offset += int(topicLen)
 	}
-	fmt.Println("topics", topics)
-	fmt.Println("offset, body", offset, len(body))
+
 	if offset+4 > len(body) {
 		return errors.New("DescribeTopicPartsRequest invalid body length while parsing response partition limit")
 	}
 	partitionLimit := binary.BigEndian.Uint32(body[offset : offset+4])
 	offset += 4
-	fmt.Println("partitionLimit", partitionLimit, "offset", offset)
-	if offset >= len(body) {
-		return errors.New("DescribeTopicPartsRequest invalid body length while parsing cursor")
-	}
-	cursorLen := int8(body[offset])
-	offset++
-	fmt.Println("topics", topics)
 
 	var cursor *string
-	if cursorLen != -1 {
-		if offset+int(cursorLen) > len(body) {
-			return errors.New("DescribeTopicPartsRequest invalid cursor length")
+	if offset < len(body) {
+		cursorLen := int8(body[offset])
+		offset++
+		if cursorLen != -1 {
+			if offset+int(cursorLen) > len(body) {
+				return errors.New("DescribeTopicPartsRequest invalid cursor length")
+			}
+			cursorStr := string(body[offset : offset+int(cursorLen)])
+			cursor = &cursorStr
+			offset += int(cursorLen)
 		}
-		cursorStr := string(body[offset : offset+int(cursorLen)])
-		cursor = &cursorStr
+		// NOTE: ignoring the tag buffer
 	}
+
 	h.request = DescribeTopicPartsRequest{
 		Topics:                 topics,
 		ResponsePartitionLimit: partitionLimit,
@@ -93,38 +90,57 @@ func (h *DescribeTopicPartsHandler) Parse(body []byte) error {
 }
 
 func (h *DescribeTopicPartsHandler) Handle(message Message) ([]byte, error) {
-	response := make([]byte, 100) // TODO: calculate this
+	fmt.Println("DescribeTopicPartsHandler.Handle")
+	fmt.Println("topics", h.request.Topics)
+	response := make([]byte, 200) // TODO: calculate this
+	size := 4
 	// header
-	binary.BigEndian.PutUint32(response[0:], message.correlationId)
-	response[4] = 0 // empty tag buffer
+	binary.BigEndian.PutUint32(response[size:], message.correlationId)
+	size += 4
+	response[size] = 0 // empty tag buffer
+	size++
 
 	// response body
-	binary.BigEndian.PutUint32(response[5:], 0)   // throttle time
-	response[9] = byte(len(h.request.Topics) + 1) // topic array length
+	binary.BigEndian.PutUint32(response[size:], 0) // throttle time
+	size += 4
+	response[size] = 0x02 // topic array length
+	size++
 
-	offset := 10
 	for _, topic := range h.request.Topics {
-		binary.BigEndian.PutUint16(response[offset:], 3) // error code
-		topicNameLen := byte(len(topic))
-		response[offset+2] = topicNameLen // topic length
-		copy(response[offset+3:], topic)  // topic name
-		offset += 3 + int(topicNameLen)
 
-		copy(response[offset:offset+64], "00000000-0000-0000-0000-000000000000") // partitions
-		offset += 64
-		response[offset] = 0 // is internal false
-		offset++
-		response[offset] = 1 // partition count (here it is empty)
-		offset++
-		binary.BigEndian.PutUint32(response[offset:], uint32(READ|WRITE|CREATE|DELETE|ALTER|DESCRIBE|DESCRIBE_CONFIGS|ALTER_CONFIGS)) // supported operations
-		offset += 4
-		response[offset] = 0 // tag buffer
+		binary.BigEndian.PutUint16(response[size:], 3) // error code
+		size += 2
+
+		// topic
+		response[size] = byte(len(topic) + 1) // topic length
+		size++
+		copy(response[size:], topic) // topic name
+		size += len(topic)
+
+		// topic ID
+		binary.BigEndian.PutUint64(response[size:], 0)
+		binary.BigEndian.PutUint64(response[size+8:], 0)
+		size += 16
+
+		response[size] = 0 // is internal false
+		size++
+
+		response[size] = 0 // partition count (here it is empty)
+		size++
+
+		binary.BigEndian.PutUint32(response[size:], READ|WRITE|CREATE|DELETE|ALTER|DESCRIBE|DESCRIBE_CONFIGS|ALTER_CONFIGS) // supported operations
+		size += 4
+		response[size] = 0 // tag buffer
+		size++
 	}
-	response[offset] = 0xFF // next cursor
-	offset++
-	response[offset] = 0 // tag buffer
 
-	return response, nil
+	response[size] = 0xff // next cursor
+	size++
+	response[size] = 0 // tag buffer
+	size++
+
+	binary.BigEndian.PutUint32(response[0:], uint32(size-4))
+	return response[:size], nil
 }
 
 type (
@@ -141,25 +157,50 @@ func (h *ApiVersionsHandler) Parse(body []byte) error {
 }
 
 func (h *ApiVersionsHandler) Handle(message Message) ([]byte, error) {
-	fmt.Println("ApiVersions request")
-	response := make([]byte, 26)
-	binary.BigEndian.PutUint32(response[0:], message.correlationId)
-	binary.BigEndian.PutUint16(response[4:], uint16(0))
-	response[6] = 3
+	fmt.Println("ApiVersionsHandler.Handle")
+	response := make([]byte, 100)
+	size := 4
+
+	// header
+	binary.BigEndian.PutUint32(response[size:], message.correlationId)
+	size += 4
+	if message.apiVersion > 4 {
+		binary.BigEndian.PutUint16(response[size:], 35)
+	} else {
+		binary.BigEndian.PutUint16(response[size:], 0)
+	}
+	size += 2
+
+	response[size] = 3
+	size++
+
 	// api version entry
-	binary.BigEndian.PutUint16(response[7:], 18)
-	binary.BigEndian.PutUint16(response[9:], 0)
-	binary.BigEndian.PutUint16(response[11:], 4)
-	response[13] = 0 // tag buffer
+	binary.BigEndian.PutUint16(response[size:], 18)
+	size += 2
+	binary.BigEndian.PutUint16(response[size:], 0)
+	size += 2
+	binary.BigEndian.PutUint16(response[size:], 4)
+	size += 2
+
+	response[size] = 0 // tag buffer
+	size++
 	// describe topic partitions entry
-	binary.BigEndian.PutUint16(response[14:], 75)
-	binary.BigEndian.PutUint16(response[16:], 0)
-	binary.BigEndian.PutUint16(response[18:], 0)
-	response[19] = 0 // tag buffer
-	binary.BigEndian.PutUint32(response[20:], 0)
-	response[24] = 0 // throttle time
-	response[25] = 0
-	return response, nil
+	binary.BigEndian.PutUint16(response[size:], 75)
+	size += 2
+	binary.BigEndian.PutUint16(response[size:], 0)
+	size += 2
+	binary.BigEndian.PutUint16(response[size:], 0)
+	size += 2
+	response[size] = 0 // tag buffer
+	size++
+	binary.BigEndian.PutUint32(response[size:], 0)
+	size += 4
+	response[size] = 0 // throttle time
+	size++
+	response[size] = 0
+
+	binary.BigEndian.PutUint32(response[0:], uint32(size-4))
+	return response[:size], nil
 }
 
 type RequestRegistry struct {
